@@ -1,0 +1,21 @@
+{
+  "name": "Obby Tower",
+  "genre": "platformer",
+  "dim": "3D",
+  "mode": "Party",
+  "players": "2–16",
+  "hook": "Climb an obstacle course with checkpoints.",
+  "how": "Jump across moving platforms, lifts and spinning bars to reach the top. Fall and you go back to your last checkpoint. Everyone climbs the same tower at once.",
+  "controls": "WASD or arrows and Space, or a stick and a Jump button",
+  "uses": [
+    ["Saves", "Your furthest checkpoint is kept, so you carry on from it next time."],
+    ["Leaderboard", "The fastest full climbs from the start."],
+    ["Bots", "Bots climb with you, and sometimes fall, until enough people join."],
+    ["Live sync", "Every climber moves for everyone at once, and the moving platforms run on one shared clock."]
+  ],
+  "ideas": [
+    "Add lava that rises over time",
+    "Add a stage of spinning bars",
+    "Give a crown to whoever is highest"
+  ]
+}
