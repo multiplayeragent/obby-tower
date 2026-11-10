@@ -609,6 +609,7 @@ const views = new Map(); // id -> { g, x, y, z, r } drawn climbers for everyone 
 let myAvatar = null;
 const camPos = new THREE.Vector3(), camLook = new THREE.Vector3();
 function frame(now) {
+  requestAnimationFrame(frame);
   const dt = Math.max(0, Math.min(0.05, (now - last) / 1000)); last = now; // the first frame can be timed before load: never negative
   if (now - lastHb > 1000) { lastHb = now; net.me.set("hb", Date.now()); fixColor(); }
   syncClock(now);
@@ -649,7 +650,6 @@ function frame(now) {
   tickConfetti(dt);
   renderer.render(scene, camera);
   if (now - lastHud > 120) { lastHud = now; hud(now); }
-  requestAnimationFrame(frame);
 }
 
 (async function start() {
