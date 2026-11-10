@@ -399,7 +399,7 @@ function beep(freq, dur, type = "sine", vol = 0.12) {
 }
 
 // ── BOTS (HOST) ─────────────────────────────────────────────────────────────────────
-const host = { bots: new Map(), wasHost: false, lastBots: 0, lastSpawn: 0 };
+const host = { bots: new Map(), wasHost: false, lastBots: 0, lastSpawn: 0, botsRaw: undefined, botsAt: 0 }; // botsAt: when `bots` last changed, on our clock
 /** Bot brain: head for the next platform, jump at the edge when it's in reach, wait for movers. */
 function botInput(b, t, now) {
   const next = course.path[Math.min(b.node, course.path.length - 1)], at = platPos(next, t + 0.5); // where it will be when we land
@@ -447,7 +447,13 @@ function nearestPlat(x, y, z) { let best = 0, bd = Infinity; for (const p of cou
 function hostTick(dt, now, t) {
   if (!host.wasHost) { // adopt the bots exactly as state has them
     host.wasHost = true; host.bots.clear();
-    for (const s of parse(S.shared.bots, [])) host.bots.set(s.i, Object.assign(makeBody(s.x, s.y, s.z), { id: s.i, name: s.n, color: s.c, ry: s.r, cp: s.cp, node: nearestPlat(s.x, s.y, s.z) + 1, progressAt: now, waitUntil: 0, wobble: 0, wobbleUntil: 0 }));
+    const age = Math.min(5, (now - host.botsAt) / 1000); // a frozen host's last write can be seconds old
+    for (const s of parse(S.shared.bots, [])) {
+      // stand it on the platform it last reached, where that platform is NOW (it may have moved on, or the bot was mid-jump)
+      const p = course.path[s.pi] || course.path[0], was = platPos(p, t - age), at = platPos(p, t), l = toLocal(was, p.yaw, s.x, s.z);
+      const o = toWorld(p.yaw, Math.max(-p.w / 2 + 0.4, Math.min(p.w / 2 - 0.4, l.lx)), Math.max(-p.d / 2 + 0.4, Math.min(p.d / 2 - 0.4, l.lz)));
+      host.bots.set(s.i, Object.assign(makeBody(at.x + o.x, at.y + p.h / 2, at.z + o.z), { id: s.i, name: s.n, color: s.c, ry: s.r, cp: s.cp, node: nearestPlat(s.x, s.y, s.z) + 1, progressAt: now, waitUntil: 0, wobble: 0, wobbleUntil: 0 }));
+    }
   }
   const want = Math.max(0, CONFIG.seats - livePlayers().length + (ATTRACT ? 1 : 0));
   if (host.bots.size < want && now - host.lastSpawn > (ATTRACT ? 350 : 700)) { host.lastSpawn = now; spawnBot(ATTRACT ? 1 : 0); }
@@ -474,6 +480,15 @@ const anim = (b) => (!b.ground ? 2 : Math.hypot(b.vx, b.vz) > 1 ? 1 : 0);
 const myName = (() => { try { return localStorage.getItem("mpa-name") || ""; } catch { return ""; } })() ||
   ["Speedy", "Bouncy", "Brave", "Sunny", "Lucky", "Zippy"][Math.floor(Math.random() * 6)] + " " + ["Climber", "Hopper", "Ninja", "Monkey", "Gecko"][Math.floor(Math.random() * 5)];
 let myColor = COLORS[0]; // picked on join: the first color nobody in the room has
+/** Two people joined at once in one color (or a bot has mine): the one with the higher sessionId picks a free one. */
+function fixColor() {
+  const others = Object.entries(S.entities.players || {}).filter(([id]) => id !== net.sessionId);
+  const botColors = isHost() ? [...host.bots.values()].map((b) => b.color) : parse(S.shared.bots, []).map((b) => b.c);
+  if (!others.some(([id, p]) => p.c === myColor && id < net.sessionId) && !botColors.includes(myColor)) return;
+  const taken = new Set([...others.map(([, p]) => p.c), ...botColors]);
+  myColor = COLORS.find((c) => !taken.has(c)) || myColor; net.me.set("c", myColor);
+  if (myAvatar) { dropAvatar(myAvatar); myAvatar = null; } // rebuilt in the new color next frame
+}
 const me = Object.assign(makeBody(0, 0, 0), { cp: 0, pi: 0, timed: true, startAt: 0, best: 0, done: false, lastSend: 0, saveLoaded: false, auto: null });
 const input = { up: false, down: false, left: false, right: false, jump: false, sx: 0, sy: 0 };
 let player = null, board = null; // MP.auth (online only): saves and the leaderboard
@@ -551,6 +566,7 @@ function climbers() {
   return out.concat(bots);
 }
 let started = 0;
+let dropped = false; // true while the connection is down: the HUD keeps showing "Reconnecting…"
 function hud(now) {
   if (ATTRACT) { for (const id of ["cp", "top", "net", "hint", "feed"]) $(id).textContent = ""; return; }
   const cps = course.checkpoints.length - 1;
@@ -559,7 +575,7 @@ function hud(now) {
   $("top").innerHTML = rows.slice(0, 6).map((r) => `<div class="${r.me ? "me" : ""}"><span>${esc(r.n)}</span><span>${r.pi >= course.path.length - 1 ? "🏆" : `CP ${r.cp}`}</span></div>`).join("");
   $("hint").textContent = now - started < 9000 ? (touchUI ? "Left thumb to move · JUMP to jump" : "WASD or arrows to move · Space to jump") : "";
   const n = livePlayers().length;
-  $("net").textContent = net.offline ? "Offline: playing with bots" : `Online · ${n} player${n === 1 ? "" : "s"}${isHost() ? " · you run the bots" : ""}`;
+  $("net").textContent = net.offline ? "Offline: playing with bots" : dropped ? "Reconnecting…" : `Online · ${n} player${n === 1 ? "" : "s"}${isHost() ? " · you run the bots" : ""}`;
 }
 $("again").onclick = startClimb;
 
@@ -594,10 +610,11 @@ let myAvatar = null;
 const camPos = new THREE.Vector3(), camLook = new THREE.Vector3();
 function frame(now) {
   const dt = Math.max(0, Math.min(0.05, (now - last) / 1000)); last = now; // the first frame can be timed before load: never negative
-  if (now - lastHb > 1000) { lastHb = now; net.me.set("hb", Date.now()); }
+  if (now - lastHb > 1000) { lastHb = now; net.me.set("hb", Date.now()); fixColor(); }
   syncClock(now);
   const t = clock() / 1000;
-  if (isHost()) hostTick(dt, now, t); else host.wasHost = false;
+  if (isHost()) hostTick(dt, now, t);
+  else { host.wasHost = false; if (S.shared.bots !== host.botsRaw) { host.botsRaw = S.shared.bots; host.botsAt = now; } }
   if (!ATTRACT) myTick(dt, now, t); // ?attract has no climber of its own: the camera follows a bot
   if (me.done && !me.doneAt) me.doneAt = now; else if (!me.done) me.doneAt = 0;
   // moving platforms and spinners, from the shared clock
@@ -608,7 +625,8 @@ function frame(now) {
   for (const c of climbers()) {
     seen.add(c.id);
     let v = views.get(c.id);
-    if (!v) { v = { g: makeAvatar(c.color, ATTRACT ? "" : c.name), x: c.x, y: c.y, z: c.z, r: c.r }; views.set(c.id, v); }
+    if (v && v.color !== c.color) { dropAvatar(v.g); views.delete(c.id); v = null; } // they changed color
+    if (!v) { v = { g: makeAvatar(c.color, ATTRACT ? "" : c.name), color: c.color, x: c.x, y: c.y, z: c.z, r: c.r }; views.set(c.id, v); }
     const k = c.bot && isHost() ? 1 : 1 - Math.pow(0.0005, dt);
     if (Math.hypot(c.x - v.x, c.y - v.y, c.z - v.z) > 8) Object.assign(v, { x: c.x, y: c.y, z: c.z }); // respawned: jump there
     v.x += (c.x - v.x) * k; v.y += (c.y - v.y) * k; v.z += (c.z - v.z) * k; v.r += Math.atan2(Math.sin(c.r - v.r), Math.cos(c.r - v.r)) * k;
@@ -638,7 +656,8 @@ function frame(now) {
   net = await connect();
   net.onState((st) => { S = st; });
   net.on("top", (msg) => { if (msg && msg.n) { announceTop(String(msg.n).slice(0, 24), Number(msg.t) || 0); if (!msg.bot) toast(`${String(msg.n).slice(0, 24)} reached the top!`); } });
-  net.onDisconnect(() => { $("net").textContent = "Reconnecting…"; });
+  net.onDisconnect(() => { dropped = true; $("net").textContent = "Reconnecting…"; });
+  net.onReconnect(() => { dropped = false; });
   if (!net.offline && typeof MP !== "undefined") { player = MP.auth({ key: MP_CONNECT.key, apiUrl: MP_CONNECT.apiUrl }); board = player.leaderboard(CONFIG.board); }
   const taken = new Set([...Object.entries(S.entities.players || {}).filter(([id]) => id !== net.sessionId).map(([, p]) => p.c), ...parse(S.shared.bots, []).map((b) => b.c)]);
   myColor = COLORS.find((c) => !taken.has(c)) || COLORS[Math.floor(Math.random() * COLORS.length)];
