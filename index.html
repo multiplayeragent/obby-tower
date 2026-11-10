@@ -171,7 +171,8 @@ function livePlayers() {
   }
   return out.sort();
 }
-const isHost = () => livePlayers()[0] === net.sessionId;
+let wakeHold = 0, lastFrameAt = 0; // a tab whose frames stopped (frozen, or in the background) doesn't act as host, nor for 700ms after it wakes (see frame())
+const isHost = () => livePlayers()[0] === net.sessionId && performance.now() >= wakeHold && !(lastFrameAt && performance.now() - lastFrameAt > 1000);
 // The shared clock: the host's Date.now() plus its own offset, learned from `clk` changes.
 const clockSync = { offset: 0, seen: undefined, samples: [], lastWrite: 0 };
 const clock = () => Date.now() + clockSync.offset;
@@ -610,6 +611,8 @@ let myAvatar = null;
 const camPos = new THREE.Vector3(), camLook = new THREE.Vector3();
 function frame(now) {
   requestAnimationFrame(frame);
+  const realNow = performance.now(); // timed on the real clock: after a long freeze the rAF time can be from before the wake
+  if (lastFrameAt && realNow - lastFrameAt > 1000) { wakeHold = realNow + 700; host.wasHost = false; } lastFrameAt = realNow; // woke from a freeze or a background tab: another player may have run the bots meanwhile, so let their state arrive, then adopt it like a new host
   const dt = Math.max(0, Math.min(0.05, (now - last) / 1000)); last = now; // the first frame can be timed before load: never negative
   if (now - lastHb > 1000) { lastHb = now; net.me.set("hb", Date.now()); fixColor(); }
   syncClock(now);
