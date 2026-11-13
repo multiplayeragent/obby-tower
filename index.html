@@ -24,6 +24,7 @@
   .card h2 { margin: 0 0 6px; font-size: 26px; color: #ffe14d; }
   .card h3 { margin: 14px 0 4px; font-size: 14px; color: #ffe14d; text-align: left; }
   .card ol { margin: 0; padding-left: 24px; font-size: 14px; text-align: left; } .card li span { float: right; font-variant-numeric: tabular-nums; }
+  .card li.note { list-style: none; margin-left: -24px; opacity: .8; }
   button.go { width: 100%; min-height: 48px; margin-top: 14px; border: 0; border-radius: 12px; background: #3ddc84; color: #06240f; font: 800 17px system-ui, sans-serif; cursor: pointer; }
   #stick { position: fixed; left: max(24px, env(safe-area-inset-left)); bottom: max(24px, env(safe-area-inset-bottom)); width: 128px; height: 128px; border-radius: 50%; background: #ffffff22; border: 2px solid #ffffff66; touch-action: none; }
   #knob { position: absolute; left: 39px; top: 39px; width: 50px; height: 50px; border-radius: 50%; background: #ffffffaa; }
@@ -47,7 +48,7 @@
 <div id="over" hidden><div class="card">
   <h2>You reached the top!</h2>
   <div id="doneTime"></div>
-  <h3>Fastest climbs</h3><ol id="board"><li>Loading…</li></ol>
+  <h3>Fastest climbs</h3><ol id="board"><li class="note">Loading…</li></ol>
   <button class="go" id="again">Climb again</button>
 </div></div>
 <script type="module">
@@ -411,7 +412,22 @@ function botInput(b, t, now) {
   let aim = land;
   if (here && b.ground !== next) { // first walk to the edge of this platform nearest the next one
     const g = b.ground, { lx, lz } = toLocal(here, g.yaw, land.x, land.z), mw = Math.max(0, g.w / 2 - 0.35), md = Math.max(0, g.d / 2 - 0.35);
-    const o = toWorld(g.yaw, Math.max(-mw, Math.min(mw, lx)), Math.max(-md, Math.min(md, lz))), exit = { x: here.x + o.x, z: here.z + o.z };
+    let ex = Math.max(-mw, Math.min(mw, lx)), ez = Math.max(-md, Math.min(md, lz));
+    if (g.bar) { // a spinner: its bar sweeps all of it but the corners. Wait in the near corner, then run along the rim to the far one
+      const l = toLocal(here, g.yaw, b.x, b.z), cw = g.w / 2 - 0.55, ahead = Math.sign(lz) || 1, bar = course.bars.find((x) => x.plat === g);
+      const safe = Math.hypot(l.lx, l.lz) > bar.len / 2 + BODY_R + 0.25;
+      if (b.rimRun !== g.i) b.rimRun = -1;
+      const reach = (side) => { const c = toWorld(g.yaw, side * cw, ahead * cw); return edgeDist(next, at, here.x + c.x, here.z + c.z) < CONFIG.botReach - 0.3; };
+      const side = Math.sign(l.lx) || 1; // the rim on its own side, unless the next platform is out of reach from that far corner
+      ex = (reach(side) || !reach(-side) ? side : -side) * cw; ez = (b.rimRun === g.i || Math.sign(l.lz) === ahead ? ahead : -ahead) * cw;
+      if (safe && b.rimRun !== g.i && Math.abs(l.lz - ez) < 0.6) { // in the near corner: go only if the bar won't cross the run
+        const far = toWorld(g.yaw, ex, ahead * cw), run = { x: here.x + far.x - b.x, z: here.z + far.z - b.z }, len = Math.hypot(run.x, run.z) || 1;
+        let clear = true;
+        for (let s = 0; s <= len / CONFIG.speed + 0.2 && clear; s += 0.05) { const k = Math.min(1, (s * CONFIG.speed) / len), bp = barPos(bar, t + s), q = toLocal(bp, bp.yaw, b.x + run.x * k, b.z + run.z * k); if (Math.abs(q.lx) < bar.w / 2 + BODY_R + 0.15 && Math.abs(q.lz) < bar.d / 2 + BODY_R + 0.3) clear = false; }
+        if (clear || b.rash) { b.rimRun = g.i; ez = ahead * cw; } else b.waitUntil = now + 50; // wait for the bar to pass
+      }
+    }
+    const o = toWorld(g.yaw, ex, ez), exit = { x: here.x + o.x, z: here.z + o.z };
     if (Math.hypot(exit.x - b.x, exit.z - b.z) > 0.45) aim = exit;
   }
   let dx = aim.x - b.x, dz = aim.z - b.z;
@@ -429,8 +445,13 @@ function botInput(b, t, now) {
   };
   if (b.ground === next) return input;
   const bar = course.bars.find((x) => x.plat === b.ground);
-  if (bar) { const bp = barPos(bar, t + 0.12), l = toLocal(bp, bp.yaw, b.x, b.z); if (Math.abs(l.lx) < bar.w / 2 + 0.5 && Math.abs(l.lz) < 1.1) { input.jump = true; return input; } } // hop the spinning bar
-  if (!support) { if (gap < CONFIG.botReach && rise < 1.5) jumpNow(); else if (here) { input.mx = input.mz = 0; } }
+  if (bar) { // hop the spinning bar: straight up (a running hop carries it off the edge), and only when the hop clears it
+    const hitIn = (s) => { const bp = barPos(bar, t + s), l = toLocal(bp, bp.yaw, b.x, b.z); return Math.abs(l.lx) < bar.w / 2 + BODY_R && Math.abs(l.lz) < bar.d / 2 + BODY_R + 0.2; };
+    if ([0.2, 0.3, 0.4, 0.5].some(hitIn) && ![0, 0.05, 0.1, 0.65, 0.75, 0.85].some(hitIn)) { input.mx = input.mz = 0; input.jump = true; return input; }
+  }
+  const nextBar = next.bar && course.bars.find((x) => x.plat === next); // jumping onto a spinner: not when its bar is about to sweep where we land
+  const swept = nextBar && !b.rash && [0.4, 0.55, 0.7, 0.85, 1].some((s) => { const bp = barPos(nextBar, t + s), q = toLocal(bp, bp.yaw, land.x, land.z); return Math.abs(q.lx) < nextBar.w / 2 + BODY_R + 0.2 && Math.abs(q.lz) < nextBar.d / 2 + BODY_R + 0.4; });
+  if (!support) { if (gap < CONFIG.botReach && rise < 1.5 && !swept) jumpNow(); else if (here) { input.mx = input.mz = 0; } }
   else if (rise > 0.4 && gap < 1.1 && rise < 1.8) jumpNow();
   return input;
 }
@@ -467,6 +488,7 @@ function hostTick(dt, now, t) {
       if (b.ground.kind === "top" && !b.doneAt) { b.doneAt = now; burst(b.x, b.y, b.z, b.color, 50, 7); announceTop(b.name, 0); net.send("top", { n: b.name, t: 0, bot: 1 }); }
     }
     if (ev === "land" && b.ground && b.ground.move && Math.random() < 0.3) b.waitUntil = now + 300; // catch its balance
+    if (ev === "land") b.rash = Math.random() < CONFIG.botSlip; // now and then it doesn't wait for a spinner's bar
     if (b.doneAt && now - b.doneAt > 3000) { b.doneAt = 0; respawnBot(b, 0); }
     if (b.y < spawnOf(b.cp).y - CONFIG.fallBelow || (b.ground && b.ground.ground) || now - b.progressAt > CONFIG.botStuck) respawnBot(b, b.cp);
   }
@@ -544,11 +566,11 @@ function finish(now) {
   $("over").hidden = false;
   $("doneTime").textContent = ms ? `Your climb: ${fmt(ms)}${me.best === ms ? " · your best!" : ` · best ${fmt(me.best)}`}` : "Climb from the start to set a time.";
   const list = $("board");
-  if (!board) { list.innerHTML = "<li>Leaderboards need a connection.</li>"; return; }
-  list.innerHTML = "<li>Loading…</li>";
+  if (!board) { list.innerHTML = "<li class=\"note\">Leaderboards need a connection.</li>"; return; }
+  list.innerHTML = "<li class=\"note\">Loading…</li>";
   (ms ? board.submit(Math.max(0, 3600000 - ms)).catch(() => null) : Promise.resolve()).then(() => board.top(10)).then(({ entries }) => {
-    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${fmt(3600000 - e.score)}</span></li>`).join("") : "<li>No climbs yet. Set the first.</li>";
-  }).catch(() => { list.innerHTML = "<li>Couldn't load the leaderboard.</li>"; });
+    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${fmt(3600000 - e.score)}</span></li>`).join("") : "<li class=\"note\">No climbs yet. Set the first.</li>";
+  }).catch(() => { list.innerHTML = "<li class=\"note\">Couldn't load the leaderboard.</li>"; });
 }
 
 // ── HUD & DONE ──────────────────────────────────────────────────────────────────────
@@ -588,6 +610,7 @@ const KEYS = { ArrowUp: "up", w: "up", W: "up", ArrowDown: "down", s: "down", S:
 const wakeAudio = () => { if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch {} } };
 addEventListener("keydown", (e) => { wakeAudio(); const k = KEYS[e.key]; if (k) { e.preventDefault(); input[k] = true; } if (e.key === " ") { e.preventDefault(); if (!e.repeat) input.jump = true; } });
 addEventListener("keyup", (e) => { const k = KEYS[e.key]; if (k) input[k] = false; });
+addEventListener("blur", () => { input.up = input.down = input.left = input.right = false; }); // switching tabs mid-run: don't keep running
 const stick = $("stick"), knob = $("knob");
 let stickId = null;
 function moveStick(e) {
