@@ -93,7 +93,7 @@ const CONFIG = {
   jump: 11,             // jump speed (about 2 units high)
   gravity: 30,
   airControl: 0.5,      // share of your steering you keep in the air
-  fallBelow: 5,         // drop this far below your checkpoint and you go back to it
+  fallBelow: 5,         // drop this far below your checkpoint (or land on the grass once past the start) and you go back to it
   botReach: 3.6,        // the widest gap a bot dares to jump
   botSlip: 0.07,        // chance a bot fumbles a jump
   botStuck: 12000,      // ms without progress before a bot goes back to its checkpoint
@@ -554,7 +554,7 @@ function myTick(dt, now, t) {
     if (g.cp > me.cp) { me.cp = g.cp; burst(me.x, me.y, me.z, "#3ddc84", 40, 6); beep(660, 0.12); setTimeout(() => beep(880, 0.18), 120); toast(`Checkpoint ${g.cp}!`); writeSave(); }
     if (g.kind === "top" && !me.done) finish(now);
   }
-  if (me.y < spawnOf(me.cp).y - CONFIG.fallBelow) { burst(me.x, me.y, me.z, myColor, 14, 3); respawnMe(me.cp); beep(200, 0.25, "sine", 0.1); }
+  if (me.y < spawnOf(me.cp).y - CONFIG.fallBelow || (me.cp > 0 && g && g.ground)) { burst(me.x, me.y, me.z, myColor, 14, 3); respawnMe(me.cp); beep(200, 0.25, "sine", 0.1); }
   if (now - me.lastSend > 80) { me.lastSend = now; net.me.set("p", JSON.stringify({ x: +me.x.toFixed(2), y: +me.y.toFixed(2), z: +me.z.toFixed(2), r: +me.ry.toFixed(2), a: anim(me), cp: me.cp, pi: me.pi, f: me.done ? 1 : 0 })); }
 }
 function finish(now) {
